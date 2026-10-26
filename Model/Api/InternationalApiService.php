@@ -17,6 +17,7 @@ use Smartcore\InPostInternational\Exception\TokenSaveException;
 use Smartcore\InPostInternational\Model\Config\Source\Mode;
 use Smartcore\InPostInternational\Model\ConfigProvider;
 use Smartcore\InPostInternational\Model\Data\OneTimePickupDto;
+use Smartcore\InPostInternational\Model\Data\ShipmentDto;
 use Smartcore\InPostInternational\Model\Data\ShipmentTypeInterface;
 
 /**
@@ -29,6 +30,13 @@ class InternationalApiService
     private const API_VERSION = '2024-06-01';
     private const API_PLUGIN_HEADER = 'InPost_Magento_International';
     private const API_ORIGIN_HEADER = 'Magento_INT';
+    private const API_VERSION_HEADER = 'X-InPost-Api-Version';
+
+    /**
+     * Origins still sent through the Send API (/shipments/{type}). Other origins use the Shipping API.
+     */
+    private const SEND_API_ORIGIN_COUNTRIES = ['PL'];
+    private const SHIPPING_API_LABEL_FORMAT = 'application/pdf+json;format=A6';
 
     /**
      * @var string
@@ -43,15 +51,29 @@ class InternationalApiService
      * @param Json $json
      * @param AccessTokenService $accessTokenService
      * @param UrlCoder $urlCoder
+     * @param ShippingApiPayloadBuilder $shippingApiPayloadBuilder
      */
     public function __construct(
         private readonly ConfigProvider     $configProvider,
         private readonly Curl               $curl,
         private readonly Json               $json,
         private readonly AccessTokenService $accessTokenService,
-        private readonly UrlCoder           $urlCoder
+        private readonly UrlCoder           $urlCoder,
+        private readonly ShippingApiPayloadBuilder $shippingApiPayloadBuilder
     ) {
         $this->setApiBaseUrl();
+    }
+
+    /**
+     * Check if shipments from the given origin country use the Shipping API rather than the Send API
+     *
+     * @param string|null $originCountryCode
+     * @return bool
+     */
+    public function usesShippingApi(?string $originCountryCode): bool
+    {
+        return (string) $originCountryCode !== ''
+            && !in_array($originCountryCode, self::SEND_API_ORIGIN_COUNTRIES, true);
     }
 
     /**
@@ -76,6 +98,10 @@ class InternationalApiService
      */
     public function createApiShipment(ShipmentTypeInterface $shipment): array
     {
+        if ($this->usesShippingApi($this->getOriginCountryCode($shipment))) {
+            return $this->createShippingApiShipment($shipment);
+        }
+
         $shipmentData = $shipment->toArray();
         $headers = [
             'X-Origin-Metadata' => self::API_ORIGIN_HEADER,
@@ -90,6 +116,70 @@ class InternationalApiService
     }
 
     /**
+     * Create shipment using the InPost Shipping API
+     *
+     * The response is mapped to the Send API response shape used when saving shipments.
+     * The Shipping API identifies shipments by tracking number, so it is also stored as the UUID.
+     *
+     * @param ShipmentTypeInterface $shipment
+     * @return array<mixed>
+     * @throws ApiException
+     * @throws LocalizedException
+     * @throws TokenSaveException
+     */
+    private function createShippingApiShipment(ShipmentTypeInterface $shipment): array
+    {
+        $organizationId = $this->configProvider->getOrganizationId();
+        if ($organizationId === '') {
+            throw new LocalizedException(
+                __('Please set the InPost organization ID to send shipments from outside Poland.')
+            );
+        }
+
+        $path = sprintf('shipping/v2/organizations/%s/shipments', rawurlencode($organizationId));
+        $response = $this->sendRequest(
+            'POST',
+            $path,
+            $this->shippingApiPayloadBuilder->build($shipment),
+            ['X-Origin-Metadata' => self::API_ORIGIN_HEADER],
+            false
+        );
+        $trackingNumber = $response['trackingNumber'] ?? null;
+
+        return [
+            'uuid' => $trackingNumber,
+            'trackingNumber' => $trackingNumber,
+            'label' => [
+                'url' => $trackingNumber
+                    ? $this->buildUrl(sprintf('%s/%s/label', $path, rawurlencode($trackingNumber)))
+                    : null,
+            ],
+            'parcel' => [
+                'parcelNumbers' => $response['parcels'][0]['parcelNumbers'] ?? null,
+            ],
+            'routing' => [
+                'deliverArea' => $response['routing']['deliveryArea'] ?? null,
+                'deliveryDepotNumber' => $response['routing']['deliveryDepotNumber'] ?? null,
+            ],
+        ];
+    }
+
+    /**
+     * Get the country a shipment is sent from
+     *
+     * @param ShipmentTypeInterface $shipment
+     * @return string|null
+     */
+    private function getOriginCountryCode(ShipmentTypeInterface $shipment): ?string
+    {
+        /** @var ShipmentDto $shipmentDto */
+        $shipmentDto = $shipment->getShipment();
+        $origin = $shipmentDto->getOrigin();
+
+        return isset($origin->address) ? $origin->getAddress()->getCountryCode() : $origin->getCountryCode();
+    }
+
+    /**
      * Get shipment label using InPost API
      *
      * @param InPostShipmentInterface $shipment
@@ -98,9 +188,13 @@ class InternationalApiService
      */
     public function getLabel(InPostShipmentInterface $shipment): string
     {
+        $usesShippingApi = $this->usesShippingApi($shipment->getOriginCountryCode());
         $labelRequest = $this->sendRequest(
             'GET',
-            $shipment->getLabelUrl()
+            $shipment->getLabelUrl(),
+            null,
+            $usesShippingApi ? ['Accept' => self::SHIPPING_API_LABEL_FORMAT] : null,
+            !$usesShippingApi
         );
         $pdfContent = false;
         if (isset($labelRequest['label']['content'])) {
@@ -192,20 +286,32 @@ class InternationalApiService
      * @param string $endpoint
      * @param array<mixed>|null $data
      * @param array<mixed>|null $headers
+     * @param bool $sendApiVersion Send API version header; the Shipping API is versioned by URL instead
      * @return array<mixed>
      * @throws ApiException
      * @throws LocalizedException
      * @throws TokenSaveException
      */
-    private function sendRequest(string $method, string $endpoint, ?array $data = null, ?array $headers = null): array
-    {
+    private function sendRequest(
+        string $method,
+        string $endpoint,
+        ?array $data = null,
+        ?array $headers = null,
+        bool $sendApiVersion = true
+    ): array {
         $url = $this->buildUrl($endpoint);
 
         $this->curl->addHeader('Authorization', 'Bearer ' . $this->accessTokenService->getAccessToken());
         $this->curl->addHeader('Content-Type', 'application/json');
         $this->curl->addHeader('Accept', 'application/json');
-        $this->curl->addHeader('X-InPost-Api-Version', self::API_VERSION);
         $this->curl->addHeader('X-Inpost-Plugin', self::API_PLUGIN_HEADER);
+
+        // The Curl client is shared, so remove the header rather than just not adding it.
+        if ($sendApiVersion) {
+            $this->curl->addHeader(self::API_VERSION_HEADER, self::API_VERSION);
+        } else {
+            $this->curl->removeHeader(self::API_VERSION_HEADER);
+        }
 
         if ($headers) {
             foreach ($headers as $key => $value) {

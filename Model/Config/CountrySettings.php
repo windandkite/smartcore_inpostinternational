@@ -117,7 +117,7 @@ class CountrySettings
             'canInPostShipPointToAddress' => false,
             'canInPostShipAddressToAddress' => false,
             'canMondialRelayShipTo' => false,
-            'canShipFrom' => false,
+            'canShipFrom' => true,
             'canInsurance' => true
         ],
         'AT' => [

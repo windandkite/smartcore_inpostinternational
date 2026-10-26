@@ -118,6 +118,11 @@ class ShipmentProcessor extends CommonProcessor
      */
     public function updateInPostShipmentFromApi(InPostShipment $shipmentDbModel): void
     {
+        // Shipping API shipments don't return a status; it's available from the Tracking API instead.
+        if ($this->apiService->usesShippingApi($shipmentDbModel->getOriginCountryCode())) {
+            return;
+        }
+
         $apiShipment = $this->apiService->getApiShipment($shipmentDbModel);
         if ($apiShipment['status'] !== $shipmentDbModel->getParcelStatus()) {
             $shipmentDbModel->setParcelStatus($apiShipment['status']);
