@@ -264,6 +264,26 @@ class ConfigProvider implements ConfigProviderInterface
     }
 
     /**
+     * Get GB region shipments are sent from (ISO 3166-2, e.g. GB-ENG)
+     *
+     * @return string|null
+     */
+    public function getOriginSubdivisionCode(): ?string
+    {
+        return $this->getSenderSettings()['origin_subdivision_code'] ?? null;
+    }
+
+    /**
+     * Get InPost organization ID, used by the Shipping API
+     *
+     * @return string
+     */
+    public function getOrganizationId(): string
+    {
+        return (string) $this->doGetShippingConfig('organization_id_' . $this->getMode());
+    }
+
+    /**
      * Get InPost tracking link
      *
      * @return string

@@ -283,6 +283,22 @@
                         <field id="mode">sandbox</field>
                     </depends>
                 </field>
+                <field id="organization_id_production" translate="label,comment" type="text" sortOrder="25" showInDefault="1"
+                       showInWebsite="1" showInStore="1">
+                    <label>Production organization ID</label>
+                    <comment>Required for shipments sent from outside Poland.</comment>
+                    <depends>
+                        <field id="mode">production</field>
+                    </depends>
+                </field>
+                <field id="organization_id_sandbox" translate="label,comment" type="text" sortOrder="25" showInDefault="1"
+                       showInWebsite="1" showInStore="1">
+                    <label>Sandbox organization ID</label>
+                    <comment>Required for shipments sent from outside Poland.</comment>
+                    <depends>
+                        <field id="mode">sandbox</field>
+                    </depends>
+                </field>
                 <field id="auth_request" translate="label,comment" type="button" sortOrder="30" showInDefault="1"
                        showInWebsite="1" showInStore="1">
                     <frontend_model>Smartcore\InPostInternational\Block\Adminhtml\System\Config\AuthRequestButton</frontend_model>
@@ -378,6 +394,13 @@
                     <field id="origin_country_code" translate="label" type="select" sortOrder="20" showInDefault="1" showInWebsite="1" canRestore="1">
                         <label>Sending country</label>
                         <source_model>Smartcore\InPostInternational\Model\Config\Source\CountryShipFrom</source_model>
+                    </field>
+                    <field id="origin_subdivision_code" translate="label" type="select" sortOrder="25" showInDefault="1" showInWebsite="1" canRestore="1">
+                        <label>Sending region</label>
+                        <source_model>Smartcore\InPostInternational\Model\Config\Source\OriginSubdivision</source_model>
+                        <depends>
+                            <field id="origin_country_code">GB</field>
+                        </depends>
                     </field>
                     <field id="company_name" translate="label" type="text" sortOrder="30" showInDefault="1" showInWebsite="1" showInStore="1" canRestore="1">
                         <label>Company name</label>
